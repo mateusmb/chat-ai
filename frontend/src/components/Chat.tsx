@@ -8,6 +8,7 @@ export default function Chat() {
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [streamingContent, setStreamingContent] = useState('');
 
     const {
         histories,
@@ -32,6 +33,7 @@ export default function Chat() {
         setInput('');
         setIsLoading(true);
         setError(null);
+        setStreamingContent('');
 
         try {
             const apiUrl = process.env.NEXT_PUBLIC_CHAT_API_URL || 'http://localhost:8000';
@@ -47,18 +49,51 @@ export default function Chat() {
                 throw new Error('Failed to fetch response');
             }
 
-            const data: ChatResponse = await response.json();
-            const assistantMessage: Message = {
-                content: data.response,
-                isUser: false
-            };
+            const reader = response.body?.getReader();
+            const decoder = new TextDecoder();
+            let accumulatedContent = '';
 
-            addMessage(assistantMessage);
+            if (!reader) {
+                throw new Error('No reader available');
+            }
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const chunk = decoder.decode(value);
+                const lines = chunk.split('\n');
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const data = JSON.parse(line.slice(6));
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+
+                        if (data.content) {
+                            accumulatedContent += data.content;
+                            setStreamingContent(accumulatedContent);
+                        }
+
+                        if (data.done) {
+                            const assistantMessage: Message = {
+                                content: accumulatedContent,
+                                isUser: false
+                            };
+                            addMessage(assistantMessage);
+                            setStreamingContent('');
+                            setIsLoading(false);
+                        }
+                    }
+                }
+            }
         } catch (err) {
             setError('Failed to connect to the server. Please try again later.');
             console.error('Error:', err);
-        } finally {
             setIsLoading(false);
+            setStreamingContent('');
         }
     };
 
@@ -76,7 +111,15 @@ export default function Chat() {
                     {currentMessages.map((message, index) => (
                         <MessageComponent key={index} message={message} />
                     ))}
-                    {isLoading && (
+                    {streamingContent && (
+                        <MessageComponent
+                            message={{
+                                content: streamingContent,
+                                isUser: false
+                            }}
+                        />
+                    )}
+                    {isLoading && !streamingContent && (
                         <div className="flex items-center space-x-2 text-gray-500">
                             <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-500"></div>
                             <span>Thinking...</span>

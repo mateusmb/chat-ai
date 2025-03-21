@@ -1,7 +1,10 @@
-from fastapi import APIRouter, Depends
-from openai import OpenAI
 import os
-from models import PromptRequest, PromptResponse
+from fastapi import APIRouter, Depends, HTTPException
+from openai import OpenAI
+from config import get_openai_client
+import json
+from fastapi.responses import StreamingResponse
+from models import PromptRequest
 
 
 router = APIRouter()
@@ -21,54 +24,65 @@ def get_fallback_response(prompt: str) -> str:
         return "I'm currently in fallback mode. Please try again later or rephrase your question."
 
 
-def setup_routes(app, get_client):
-    """Setup routes with the provided OpenAI client getter"""
-    
-    @router.get("/")
-    async def root():
-        return {"message": "Welcome to the AI Chat API. Use /docs to see the API documentation."}
+@router.get("/")
+async def root():
+    return {"message": "Welcome to the AI Chat API. Use /docs to see the API documentation."}
 
-    @router.post("/ask", response_model=PromptResponse)
-    async def ask_question(request: PromptRequest, client: OpenAI = Depends(get_client)):
-        """
-        Process a user prompt and return an AI-generated response.
 
-        This endpoint attempts to get a response from OpenAI's GPT model. If the OpenAI service
-        is unavailable, it falls back to rule-based responses based on the prompt content.
+async def stream_openai_response(client: OpenAI, prompt: str):
+    try:
+        response = client.chat.completions.create(
+            model=os.getenv("MODEL_NAME", "gpt-3.5-turbo"),
+            messages=[{"role": "user", "content": prompt}],
+            stream=True
+        )
+        
+        for chunk in response:
+            if chunk.choices[0].delta.content is not None:
+                yield f"data: {json.dumps({'content': chunk.choices[0].delta.content})}\n\n"
+        
+        yield f"data: {json.dumps({'done': True})}\n\n"
+    except Exception as e:
+        fallback = get_fallback_response(prompt)
+        yield f"data: {json.dumps({'content': fallback})}\n\n"
+        yield f"data: {json.dumps({'done': True})}\n\n"
 
-        Args:
-            request (PromptRequest): The request containing the user's prompt.
 
-        Returns:
-            PromptResponse: An object containing:
-                - response (str): The AI-generated or fallback response
-                - source (str): Either "openai" or "fallback" indicating the response source
+@router.post("/ask")
+async def ask(prompt: PromptRequest, client: OpenAI = Depends(get_openai_client)):
+    """
+    Process a user prompt and return a streaming AI-generated response.
 
-        Example:
-            Request:
-            {
-                "prompt": "What is the capital of France?"
-            }
-            Response:
-            {
-                "response": "The capital of France is Paris.",
-                "source": "openai"
-            }
-        """
-        try:
-            response = client.chat.completions.create(
-                model=os.getenv("MODEL_NAME", "gpt-3.5-turbo"),
-                messages=[
-                    {"role": "user", "content": request.prompt}
-                ]
-            )
-            
-            return PromptResponse(
-                response=response.choices[0].message.content,
-                source="openai"
-            )
-        except Exception as e:
-            return PromptResponse(
-                response=get_fallback_response(request.prompt),
-                source="fallback"
-            ) 
+    This endpoint accepts a prompt and returns a Server-Sent Events (SSE) stream containing
+    the AI-generated response. If the OpenAI service is unavailable, it falls back to
+    rule-based responses based on the prompt content.
+
+    Args:
+        prompt (PromptRequest): The request containing the user's prompt.
+        client (OpenAI): The OpenAI client instance (injected via dependency).
+
+    Returns:
+        StreamingResponse: A text/event-stream response containing:
+            - Content chunks: {"content": "chunk of text"}
+            - Completion marker: {"done": true}
+            - Error handling: Falls back to rule-based responses if OpenAI fails
+
+    Example:
+        Request:
+        {
+            "prompt": "What is the capital of France?"
+        }
+        Response (stream):
+        data: {"content": "The capital of France is Paris."}
+        data: {"done": true}
+
+    Raises:
+        HTTPException: 500 status code if there's an error processing the request.
+    """
+    try:
+        return StreamingResponse(
+            stream_openai_response(client, prompt.prompt),
+            media_type="text/event-stream"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) 

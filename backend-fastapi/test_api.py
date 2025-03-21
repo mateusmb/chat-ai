@@ -4,7 +4,8 @@ os.environ["OPENAI_API_KEY"] = "test-api-key"
 os.environ["MODEL_NAME"] = "gpt-3.5-turbo"
 import pytest
 from fastapi.testclient import TestClient
-from main import create_app, get_openai_client
+from main import app
+from config import get_openai_client
 
 
 @pytest.fixture
@@ -17,7 +18,6 @@ def mock_openai_client():
 @pytest.fixture
 def test_app(mock_openai_client):
     """Create a test application instance"""
-    app = create_app()
     app.dependency_overrides = {get_openai_client: lambda: mock_openai_client}
     return app
 
@@ -34,28 +34,34 @@ def test_root_endpoint(test_client):
     assert response.json() == {"message": "Welcome to the AI Chat API. Use /docs to see the API documentation."}
 
 
-def test_ask_endpoint_success(test_client, mock_openai_client):
-    mock_response = MagicMock()
-    mock_response.choices = [
-        MagicMock(
-            message=MagicMock(
-                content="This is a test response",
-                role="assistant"
-            )
-        )
-    ]
-    mock_openai_client.chat.completions.create.return_value = mock_response
-    
-    response = test_client.post("/ask", json={"prompt": "Hello"})
-    
-    assert response.status_code == 200
-    assert response.json()["response"] == "This is a test response"
-    assert response.json()["source"] == "openai"
-    
-    mock_openai_client.chat.completions.create.assert_called_once_with(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "Hello"}]
-    )
+async def mock_stream_response(*args, **kwargs):
+    yield 'data: {"content": "Test response"}\n\n'
+    yield 'data: {"done": true}\n\n'
+
+
+async def mock_error_stream_response(*args, **kwargs):
+    yield 'data: {"error": "Test error"}\n\n'
+    yield 'data: {"done": true}\n\n'
+
+
+def test_ask_endpoint_success(test_client):
+    with patch("routes.stream_openai_response", side_effect=mock_stream_response):
+        response = test_client.post("/ask", json={"prompt": "Test prompt"})
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers["content-type"]
+        
+        content = "".join(response.iter_text())
+        assert "Test response" in content
+
+
+def test_ask_endpoint_error(test_client):
+    with patch("routes.stream_openai_response", side_effect=mock_error_stream_response):
+        response = test_client.post("/ask", json={"prompt": "Test prompt"})
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers["content-type"]
+        
+        content = "".join(response.iter_text())
+        assert "Test error" in content
 
 
 def test_ask_endpoint_invalid_request(test_client):
@@ -68,8 +74,9 @@ def test_ask_endpoint_fallback(test_client, mock_openai_client):
     
     response = test_client.post("/ask", json={"prompt": "Hello"})
     assert response.status_code == 200
-    assert "fallback mode" in response.json()["response"]
-    assert response.json()["source"] == "fallback"
+    assert "text/event-stream" in response.headers["content-type"]
+    content = "".join(response.iter_text())
+    assert "fallback mode" in content
 
 
 def test_fallback_responses(test_client, mock_openai_client):
@@ -77,25 +84,30 @@ def test_fallback_responses(test_client, mock_openai_client):
     
     response = test_client.post("/ask", json={"prompt": "Hello"})
     assert response.status_code == 200
-    assert "Hello! I'm currently in fallback mode" in response.json()["response"]
-    assert response.json()["source"] == "fallback"
+    assert "text/event-stream" in response.headers["content-type"]
+    content = "".join(response.iter_text())
+    assert "Hello! I'm currently in fallback mode" in content
     
     response = test_client.post("/ask", json={"prompt": "Hi there"})
     assert response.status_code == 200
-    assert "Hello! I'm currently in fallback mode" in response.json()["response"]
-    assert response.json()["source"] == "fallback"
+    assert "text/event-stream" in response.headers["content-type"]
+    content = "".join(response.iter_text())
+    assert "Hello! I'm currently in fallback mode" in content
     
     response = test_client.post("/ask", json={"prompt": "How are you?"})
     assert response.status_code == 200
-    assert "I'm functioning in fallback mode" in response.json()["response"]
-    assert response.json()["source"] == "fallback"
+    assert "text/event-stream" in response.headers["content-type"]
+    content = "".join(response.iter_text())
+    assert "I'm functioning in fallback mode" in content
     
     response = test_client.post("/ask", json={"prompt": "What is the weather?"})
     assert response.status_code == 200
-    assert "I apologize, but I'm currently in fallback mode" in response.json()["response"]
-    assert response.json()["source"] == "fallback"
+    assert "text/event-stream" in response.headers["content-type"]
+    content = "".join(response.iter_text())
+    assert "I apologize, but I'm currently in fallback mode" in content
     
     response = test_client.post("/ask", json={"prompt": "Random text"})
     assert response.status_code == 200
-    assert "I'm currently in fallback mode" in response.json()["response"]
-    assert response.json()["source"] == "fallback" 
+    assert "text/event-stream" in response.headers["content-type"]
+    content = "".join(response.iter_text())
+    assert "I'm currently in fallback mode" in content 
