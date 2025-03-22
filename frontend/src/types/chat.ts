@@ -1,6 +1,7 @@
 export interface Message {
     content: string;
-    isUser: boolean;
+    role: 'user' | 'assistant';
+    timestamp?: Date;
 }
 
 export interface ChatResponse {

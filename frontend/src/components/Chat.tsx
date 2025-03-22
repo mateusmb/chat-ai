@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Message, ChatResponse } from '../types/chat';
-import MessageComponent from './Message';
+import { Message as MessageComponent } from './Message';
 import ChatHistory from './ChatHistory';
 import { useChatHistory } from '../hooks/useChatHistory';
 
@@ -24,16 +24,14 @@ export default function Chat() {
         e.preventDefault();
         if (!input.trim() || isLoading) return;
 
-        const userMessage: Message = {
-            content: input.trim(),
-            isUser: true
-        };
-
-        addMessage(userMessage);
+        const userMessage = input.trim();
         setInput('');
         setIsLoading(true);
-        setError(null);
-        setStreamingContent('');
+
+        addMessage({
+            role: 'user',
+            content: userMessage,
+        });
 
         try {
             const apiUrl = process.env.NEXT_PUBLIC_CHAT_API_URL || 'http://localhost:8000';
@@ -42,58 +40,62 @@ export default function Chat() {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ prompt: input.trim() }),
+                body: JSON.stringify({ prompt: userMessage }),
             });
 
             if (!response.ok) {
-                throw new Error('Failed to fetch response');
+                throw new Error(`HTTP error! status: ${response.status}`);
             }
 
-            const reader = response.body?.getReader();
-            const decoder = new TextDecoder();
-            let accumulatedContent = '';
+            const contentType = response.headers.get('content-type');
+            if (contentType && contentType.includes('text/event-stream')) {
+                const reader = response.body?.getReader();
+                if (!reader) throw new Error('No reader available');
 
-            if (!reader) {
-                throw new Error('No reader available');
-            }
+                let accumulatedContent = '';
+                const decoder = new TextDecoder();
 
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
 
-                const chunk = decoder.decode(value);
-                const lines = chunk.split('\n');
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
 
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        const data = JSON.parse(line.slice(6));
-                        
-                        if (data.error) {
-                            throw new Error(data.error);
-                        }
-
-                        if (data.content) {
-                            accumulatedContent += data.content;
-                            setStreamingContent(accumulatedContent);
-                        }
-
-                        if (data.done) {
-                            const assistantMessage: Message = {
-                                content: accumulatedContent,
-                                isUser: false
-                            };
-                            addMessage(assistantMessage);
-                            setStreamingContent('');
-                            setIsLoading(false);
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = line.slice(6);
+                            try {
+                                const parsed = JSON.parse(data);
+                                if (parsed.done) {
+                                    setIsLoading(false);
+                                    break;
+                                }
+                                if (parsed.content) {
+                                    accumulatedContent += parsed.content;
+                                    setStreamingContent(accumulatedContent);
+                                }
+                            } catch (e) {
+                                console.error('Error parsing SSE data:', e);
+                            }
                         }
                     }
                 }
+            } else {
+                const data = await response.json();
+                addMessage({
+                    role: 'assistant',
+                    content: data.response,
+                });
+                setIsLoading(false);
             }
-        } catch (err) {
-            setError('Failed to connect to the server. Please try again later.');
-            console.error('Error:', err);
+        } catch (error) {
+            console.error('Error:', error);
+            addMessage({
+                role: 'assistant',
+                content: 'Sorry, there was an error processing your request.',
+            });
             setIsLoading(false);
-            setStreamingContent('');
         }
     };
 
@@ -115,7 +117,7 @@ export default function Chat() {
                         <MessageComponent
                             message={{
                                 content: streamingContent,
-                                isUser: false
+                                role: 'assistant'
                             }}
                         />
                     )}
