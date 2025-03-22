@@ -8,7 +8,7 @@ const initialHistory: ChatHistory = {
     messages: [
         {
             content: "Hello! I am your AI assistant. Please, ask me anything!",
-            isUser: false
+            role: 'assistant'
         }
     ],
     timestamp: Date.now()
@@ -58,7 +58,7 @@ export function useChatHistory() {
             messages: [
                 {
                     content: "Hello! I am your AI assistant. Please, ask me anything!",
-                    isUser: false
+                    role: 'assistant'
                 }
             ],
             timestamp: Date.now()

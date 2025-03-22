@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  backend-fastapi:
+    build: 
+      context: ./backend-fastapi
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend-fastapi/.env
+    volumes:
+      - ./backend-fastapi:/app
+    networks:
+      - chat-network
+
+  backend-nest:
+    build:
+      context: ./backend-nest
+      dockerfile: Dockerfile
+    ports:
+      - "4000:4000"
+    env_file:
+      - ./backend-nest/.env
+    volumes:
+      - ./backend-nest:/app
+    networks:
+      - chat-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    env_file:
+      - ./frontend/.env.local
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - backend-fastapi
+      - backend-nest
+    networks:
+      - chat-network
+
+networks:
+  chat-network:
+    driver: bridge 

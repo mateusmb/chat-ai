@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { Message, ChatResponse } from '../types/chat';
 import { Message as MessageComponent } from './Message';
 import ChatHistory from './ChatHistory';
 import { useChatHistory } from '../hooks/useChatHistory';
@@ -76,6 +75,7 @@ export default function Chat() {
                                     setStreamingContent(accumulatedContent);
                                 }
                             } catch (e) {
+                                setError(e as string);
                                 console.error('Error parsing SSE data:', e);
                             }
                         }
@@ -91,6 +91,7 @@ export default function Chat() {
             }
         } catch (error) {
             console.error('Error:', error);
+            setError(error as string);
             addMessage({
                 role: 'assistant',
                 content: 'Sorry, there was an error processing your request.',
